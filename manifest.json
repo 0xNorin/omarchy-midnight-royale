@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "app.0xnorin.midnight-royale",
+  "name": "Midnight Royale",
+  "version": "0.1.0",
+  "author": "0xNorin",
+  "license": "MIT",
+  "description": "An Omarchy bar applet for launching and updating Midnight Royale.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Midnight Royale",
+    "category": "Other",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
