@@ -54,15 +54,17 @@ Panel {
     return false
   }
 
-  // Re-run version detection and the update check. Called on open, Retry, and
-  // after a successful install. Nothing here blocks the shell.
+  // Re-run detection and the update check. Called on open, Retry, and after a
+  // successful install. Detection first asks `which` — unlike running the game
+  // binary directly, `which` always exists, so its exit code reliably tells us
+  // whether the game is installed even when the binary is absent.
   function refresh() {
     statusKey = Model.STATUS_CHECKING
     installedVersion = ""
     latestVersion = ""
     updateState = Model.UPDATE_UNAVAILABLE
-    versionProcess.command = ["midnight-royale", "--version"]
-    versionProcess.running = true
+    whichProcess.command = ["which", "midnight-royale"]
+    whichProcess.running = true
   }
 
   // ---- Actions ----
@@ -87,7 +89,24 @@ Panel {
     installMetaProcess.running = true
   }
 
-  // ---- Version detection: midnight-royale --version ----
+  // ---- Detection step 1: which midnight-royale ----
+  Process {
+    id: whichProcess
+    command: []
+    running: false
+    stdout: StdioCollector { id: whichStdout; waitForEnd: true }
+    stderr: StdioCollector { id: whichStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        statusKey = Model.STATUS_NOT_INSTALLED
+        return
+      }
+      versionProcess.command = ["midnight-royale", "--version"]
+      versionProcess.running = true
+    }
+  }
+
+  // ---- Detection step 2: midnight-royale --version ----
   property string _versionStdout: ""
 
   Process {
@@ -98,7 +117,8 @@ Panel {
     stderr: StdioCollector { id: versionStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        statusKey = Model.STATUS_NOT_INSTALLED
+        // `which` found it, but --version failed: installed, version unknown.
+        statusKey = Model.STATUS_INSTALLED_UNPARSED
         return
       }
       var parsed = Model.parseVersion(String(root._versionStdout || versionStdout.text || ""))
