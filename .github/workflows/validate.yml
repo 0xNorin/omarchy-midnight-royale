@@ -1,0 +1,58 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Required files present
+        run: |
+          for f in manifest.json BarWidget.qml Panel.qml Model.js README.md LICENSE CHANGELOG.md SECURITY.md; do
+            test -f "$f" || { echo "missing required file: $f"; exit 1; }
+          done
+
+      - name: Manifest is valid JSON with required fields
+        run: |
+          jq -e '.schemaVersion == 1' manifest.json >/dev/null
+          jq -e '.id == "app.0xnorin.midnight-royale"' manifest.json >/dev/null
+          jq -e '.name != "" and .version != "" and .author != "" and .license != ""' manifest.json >/dev/null
+          jq -e '.kinds | index("bar-widget")' manifest.json >/dev/null
+          jq -e '.entryPoints.barWidget == "BarWidget.qml"' manifest.json >/dev/null
+          jq -e '.id | startswith("omarchy.") | not' manifest.json >/dev/null
+
+      - name: No symlinks
+        run: |
+          if find . -type l | grep -q .; then echo "symlinks are not allowed"; exit 1; fi
+
+      - name: No committed game binaries or archives
+        run: |
+          if find . -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.pkg.tar.zst' -o -name 'midnight-royale' \) | grep -q .; then
+            echo "game binary or archive committed"; exit 1
+          fi
+          if find . -type f -size +5M | grep -q .; then echo "oversized file committed"; exit 1; fi
+
+      - name: Model.js parses (node)
+        run: node --check Model.js
+
+      - name: Model.js logic smoke test
+        run: |
+          node -e '
+            const M = require("./Model.js");
+            if (M.parseVersion("Midnight Royale 1.0.3") !== "1.0.3") throw new Error("parseVersion");
+            if (M.parseVersion("Midnight Royale 1.0.3\n") !== "1.0.3") throw new Error("parseVersion newline");
+            if (M.parseVersion("nonsense") !== null) throw new Error("parseVersion garbage");
+            if (M.compareVersions("1.0.3", "1.0.4") >= 0) throw new Error("compare <");
+            if (M.compareVersions("1.0.4", "1.0.3") <= 0) throw new Error("compare >");
+            if (M.compareVersions("1.0.3", "1.0.3") !== 0) throw new Error("compare =");
+            if (M.compareVersions("1.0.4-rc.1", "1.0.4") >= 0) throw new Error("compare prerelease");
+            if (M.parseStableJson("not json") !== null) throw new Error("parseStableJson garbage");
+            if (M.parseStableJson("{}") !== null) throw new Error("parseStableJson empty");
+            const ok = M.parseStableJson(JSON.stringify({app_id:"midnight-royale",channel:"stable",status:"published",version:"1.0.4"}));
+            if (ok.version !== "1.0.4") throw new Error("parseStableJson valid");
+            console.log("Model.js logic OK");
+          '
