@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "0xNorin",
   "license": "MIT",
-  "description": "An Omarchy bar applet for launching and updating Midnight Royale.",
+  "description": "An Omarchy bar applet for installing, launching and updating Midnight Royale.",
   "kinds": [
     "bar-widget"
   ],

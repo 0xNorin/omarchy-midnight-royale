@@ -52,7 +52,12 @@ jobs:
             if (M.compareVersions("1.0.4-rc.1", "1.0.4") >= 0) throw new Error("compare prerelease");
             if (M.parseStableJson("not json") !== null) throw new Error("parseStableJson garbage");
             if (M.parseStableJson("{}") !== null) throw new Error("parseStableJson empty");
-            const ok = M.parseStableJson(JSON.stringify({app_id:"midnight-royale",channel:"stable",status:"published",version:"1.0.4"}));
+            const ok = M.parseStableJson(JSON.stringify({app_id:"midnight-royale",channel:"stable",status:"published",version:"1.0.4",artifacts:[{platform:"linux",architecture:"amd64",download_url:"https://commerce.0xnorin.app/releases/1.0.4/MidnightRoyale-0xNorin-1.0.4-linux-amd64.tar.gz",sha256:"a".repeat(64)}]}));
             if (ok.version !== "1.0.4") throw new Error("parseStableJson valid");
+            if (!ok.linuxAmd64 || ok.linuxAmd64.sha256 !== "a".repeat(64)) throw new Error("parseStableJson linuxAmd64");
+            const noLinux = M.parseStableJson(JSON.stringify({app_id:"midnight-royale",channel:"stable",status:"published",version:"1.0.4",artifacts:[{platform:"windows",architecture:"amd64",download_url:"https://x/y",sha256:"a".repeat(64)}]}));
+            if (noLinux.linuxAmd64 !== null) throw new Error("parseStableJson no linux");
+            if (M.parseSha256Sum("a".repeat(64) + "  /tmp/x.tar.gz") !== "a".repeat(64)) throw new Error("parseSha256Sum");
+            if (M.parseSha256Sum("nonsense") !== null) throw new Error("parseSha256Sum garbage");
             console.log("Model.js logic OK");
           '

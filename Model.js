@@ -6,21 +6,21 @@
 
 var APP_ID = "app.0xnorin.midnight-royale"
 
-// Official URLs. The plugin only ever opens these; it never runs an
-// installer, requests sudo, or downloads anything itself.
+// Official URLs. The plugin opens these in a browser; it never runs an
+// installer script from them.
 var WEBSITE_URL = "https://0xnorin.app/midnight-royale/"
-var INSTALL_URL = "https://0xnorin.app/midnight-royale/install/"
-var INSTALL_UPDATES_URL = "https://0xnorin.app/midnight-royale/install/"
 
-// The public, unsigned release record the website consumes. It is read ONLY
-// as a display hint for "a newer version exists". It is not a trust boundary:
-// any real update is delegated to the game's signed updater and is never
-// reimplemented in this plugin.
+// The public, unsigned release record the website consumes. The install and
+// update checks read this for the current version, the Linux artifact URL and
+// its SHA-256. It is a convenience hint, not a cryptographic trust boundary:
+// downloads are verified against this checksum for integrity, while the
+// game's own signed updater remains the signature-verifying trust path.
 var UPDATE_METADATA_URL = "https://commerce.0xnorin.app/releases/stable.json"
 
 // ---- Status keys ----
 var STATUS_CHECKING = "checking"
 var STATUS_NOT_INSTALLED = "not-installed"
+var STATUS_INSTALLING = "installing"
 var STATUS_INSTALLED = "installed"
 var STATUS_INSTALLED_UNPARSED = "installed-unparsed"
 
@@ -87,8 +87,9 @@ function parseSemver(raw) {
 }
 
 // Parse the public stable release record defensively. Returns
-// { version: "1.0.3" } for a well-formed published stable record, or null for
-// anything malformed, withdrawn, wrong-app or wrong-channel.
+// { version, linuxAmd64 } where linuxAmd64 is { url, sha256 } for the Linux
+// x86_64 artifact, or null for anything malformed, withdrawn, wrong-app or
+// wrong-channel. linuxAmd64 is null when no valid Linux artifact is present.
 function parseStableJson(text) {
   var s = String(text === undefined || text === null ? "" : text)
   if (!s) return null
@@ -99,7 +100,27 @@ function parseStableJson(text) {
   if (data.channel !== "stable") return null
   if (data.status !== "published") return null
   if (typeof data.version !== "string" || !validSemver(data.version)) return null
-  return { version: data.version }
+
+  var linuxAmd64 = null
+  if (Array.isArray(data.artifacts)) {
+    for (var i = 0; i < data.artifacts.length; i++) {
+      var a = data.artifacts[i]
+      if (!a || typeof a !== "object") continue
+      if (a.platform !== "linux" || a.architecture !== "amd64") continue
+      if (typeof a.download_url !== "string" || a.download_url.indexOf("https://") !== 0) continue
+      if (typeof a.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(a.sha256)) continue
+      linuxAmd64 = { url: a.download_url, sha256: a.sha256 }
+      break
+    }
+  }
+  return { version: data.version, linuxAmd64: linuxAmd64 }
+}
+
+// First 64-hex digest out of a `sha256sum` line ("<hash>  <file>"), or null.
+function parseSha256Sum(output) {
+  var s = String(output === undefined || output === null ? "" : output).trim()
+  var match = /^([0-9a-fA-F]{64})\b/.exec(s)
+  return match ? match[1].toLowerCase() : null
 }
 
 // ---- Display strings (pure; QML binds these) ----
@@ -107,6 +128,7 @@ function parseStableJson(text) {
 function statusTitle(statusKey, installedVersion) {
   switch (statusKey) {
     case STATUS_NOT_INSTALLED: return "Midnight Royale is not installed"
+    case STATUS_INSTALLING: return "Installing Midnight Royale\u2026"
     case STATUS_INSTALLED_UNPARSED: return "Midnight Royale is installed"
     case STATUS_CHECKING: return "Checking Midnight Royale\u2026"
     default: return "Installed \u00b7 v" + installedVersion
@@ -114,7 +136,7 @@ function statusTitle(statusKey, installedVersion) {
 }
 
 function statusSubtitle(statusKey, updateState, latestVersion) {
-  if (statusKey === STATUS_CHECKING) return ""
+  if (statusKey === STATUS_CHECKING || statusKey === STATUS_INSTALLING) return ""
   if (statusKey === STATUS_NOT_INSTALLED) return ""
   if (statusKey === STATUS_INSTALLED_UNPARSED) return "Version unavailable"
   if (updateState === UPDATE_AVAILABLE) return "Update available \u00b7 v" + latestVersion
@@ -126,11 +148,10 @@ if (typeof module !== "undefined") {
   module.exports = {
     APP_ID: APP_ID,
     WEBSITE_URL: WEBSITE_URL,
-    INSTALL_URL: INSTALL_URL,
-    INSTALL_UPDATES_URL: INSTALL_UPDATES_URL,
     UPDATE_METADATA_URL: UPDATE_METADATA_URL,
     STATUS_CHECKING: STATUS_CHECKING,
     STATUS_NOT_INSTALLED: STATUS_NOT_INSTALLED,
+    STATUS_INSTALLING: STATUS_INSTALLING,
     STATUS_INSTALLED: STATUS_INSTALLED,
     STATUS_INSTALLED_UNPARSED: STATUS_INSTALLED_UNPARSED,
     UPDATE_CURRENT: UPDATE_CURRENT,
@@ -140,6 +161,7 @@ if (typeof module !== "undefined") {
     validSemver: validSemver,
     compareVersions: compareVersions,
     parseStableJson: parseStableJson,
+    parseSha256Sum: parseSha256Sum,
     statusTitle: statusTitle,
     statusSubtitle: statusSubtitle
   }

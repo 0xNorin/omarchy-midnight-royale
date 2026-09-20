@@ -1,13 +1,14 @@
 # Midnight Royale for Omarchy
 
-An optional [Omarchy](https://omarchy.org/) bar applet for launching and
-updating [Midnight Royale](https://0xnorin.app/midnight-royale/) — a mature
-retro five-card-draw terminal game by [0xNorin](https://0xnorin.app).
+An optional [Omarchy](https://omarchy.org/) bar applet for installing,
+launching and updating [Midnight Royale](https://0xnorin.app/midnight-royale/)
+— a mature retro five-card-draw terminal game by [0xNorin](https://0xnorin.app).
 
 This is an **Omarchy integration only**, not the game itself. It adds a small
 spade glyph to the Omarchy bar that detects whether Midnight Royale is
-installed, shows its version, tells you when a newer signed release exists,
-and launches the game in your configured terminal.
+installed, shows its version, installs it with one click when it is missing,
+tells you when a newer signed release exists, and launches the game in your
+configured terminal.
 
 > Built for the terminal. At home on Omarchy.
 
@@ -22,17 +23,19 @@ and launches the game in your configured terminal.
 ## Features
 
 - A minimal `♠` glyph in the Omarchy bar with a `Midnight Royale` tooltip.
-- Detects whether Midnight Royale is installed.
-- Shows the installed game version.
+- Detects whether Midnight Royale is installed and shows its version.
+- One-click install of the official Linux release (no `sudo`, SHA-256 verified).
 - Checks for a newer signed release and shows an "Update available" hint.
-- `Play`, `Website`, and `Installation & Updates` actions.
-- Never blocks the shell: version detection and the release check run as
+- `Install`, `Play`, `Website`, and `Retry` actions.
+- Never blocks the shell: detection, install and release checks run as
   short-lived subprocesses with strict timeouts.
 
 ## Requirements
 
 - Omarchy 4 (Quattro shell) or later.
-- Midnight Royale installed separately — this plugin does **not** install it.
+
+Midnight Royale is installed separately by the widget itself — no manual
+download is required.
 
 ## Installation
 
@@ -50,12 +53,12 @@ omarchy bar move app.0xnorin.midnight-royale --section right
 
 Click the `♠` in the bar to open the details panel. Press `Escape` to close it.
 
-- **Not installed** — `Get Midnight Royale` opens the official installation
-  page (it never runs an installer or requests sudo).
+- **Not installed** — `Install Midnight Royale` downloads the official Linux
+  release, verifies its checksum, and installs it to `~/.local/bin` (no sudo).
 - **Installed** — `Play` launches the game in your configured terminal.
-- **Update available** — `Installation & Updates` opens the official update
-  instructions. Updates are performed by the game's own signed updater, never
-  by this plugin.
+- **Update available** — the panel shows the newer version. Updates are
+  performed by the game's own signed updater, never by this plugin.
+- `Website` opens the Midnight Royale website at any time.
 
 ## Plugin updating
 
@@ -74,14 +77,17 @@ own signed updater.
 omarchy plugin remove app.0xnorin.midnight-royale
 ```
 
-Removing the plugin never touches the game or its saved data.
+Removing the plugin never touches the game or its saved data. To remove the
+game itself, delete `~/.local/bin/midnight-royale`.
 
 ## Troubleshooting
 
+- **Install fails with a checksum mismatch** — the download was corrupted or
+  the release record changed; try again. Nothing is installed unless the
+  checksum matches.
 - **The widget shows "not installed" but the game is there** — make sure
   `midnight-royale` is on your `PATH` (for example `/usr/bin/midnight-royale`
-  from the AUR package, or `~/.local/bin/midnight-royale` from the web
-  installer).
+  from the AUR package, or `~/.local/bin/midnight-royale`).
 - **"Unable to check for updates"** — the release check needs network access
   to `commerce.0xnorin.app`. The game still launches normally.
 - **`Play` does nothing** — confirm a terminal is configured and that
@@ -90,18 +96,21 @@ Removing the plugin never touches the game or its saved data.
 ## Security
 
 This plugin is deliberately thin. It contains no game binary, no payment
-logic, no customer data, no entitlement logic, and no updater. It:
+logic, no customer data, and no entitlement logic. It:
 
-- runs without `sudo` and adds no installation hooks;
-- never runs `curl | sh` and never downloads or executes code;
+- installs the game to `~/.local/bin` without `sudo` and adds no install hooks;
+- downloads the release over HTTPS and verifies its SHA-256 against the
+  release record before installing — it never runs `curl | sh` and never pipes
+  downloaded content into a shell;
 - launches the game with a fixed argument array (no shell, no interpolation);
-- applies a strict timeout to its single network request, which reads only
-  the public release record for the version hint;
-- delegates every real update to Midnight Royale's signed updater — update
+- applies strict timeouts to its network requests, which read only the
+  official release record;
+- delegates every update to Midnight Royale's signed updater — update
   signature verification is never reimplemented here.
 
-The version check is display-only and unsigned; it is a convenience hint, not
-a security boundary.
+The install checksum and the version check are display- and integrity-level
+hints sourced from the unsigned public release record; the game's own signed
+updater remains the signature-verifying trust path.
 
 See [SECURITY.md](SECURITY.md).
 
