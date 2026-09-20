@@ -71,7 +71,9 @@ Panel {
   // uwsm-app keeps the terminal in a proper session scope. The panel closes
   // after the launch request is handed off.
   function play() {
-    Quickshell.execDetached(["uwsm-app", "--", "xdg-terminal-exec", "--", "midnight-royale"])
+    // Verified against xdg-terminal-exec on Omarchy 4.0.4: --app-id and
+    // --title set the Wayland app-id and terminal title.
+    Quickshell.execDetached(["uwsm-app", "--", "xdg-terminal-exec", "--app-id=app.0xnorin.midnight-royale", "--title=Midnight Royale", "--", "midnight-royale"])
     root.close()
   }
 
