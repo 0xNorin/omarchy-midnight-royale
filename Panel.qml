@@ -406,11 +406,13 @@ Panel {
           font.pixelSize: Style.font.subtitle
           font.bold: true
           font.letterSpacing: 1
+          textFormat: Text.PlainText
         }
 
         Text {
           width: parent.width
           text: "Retro five-card draw after dark"
+          textFormat: Text.PlainText
           color: Qt.darker(root.contentForeground, 1.5)
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.bodySmall
@@ -421,6 +423,7 @@ Panel {
           width: parent.width
           topPadding: Style.space(6)
           text: root.titleText
+          textFormat: Text.PlainText
           color: root.contentForeground
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.body
@@ -432,6 +435,7 @@ Panel {
           width: parent.width
           visible: root.subtitleText !== ""
           text: root.subtitleText
+          textFormat: Text.PlainText
           color: Qt.darker(root.contentForeground, 1.3)
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.bodySmall
@@ -442,6 +446,7 @@ Panel {
           width: parent.width
           visible: root.installError !== "" && root.statusKey === Model.STATUS_NOT_INSTALLED
           text: root.installError
+          textFormat: Text.PlainText
           color: Color.urgent
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.bodySmall

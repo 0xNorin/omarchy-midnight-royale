@@ -77,17 +77,19 @@ function parseVersion(output) {
   return validSemver(candidate) ? candidate : null
 }
 
+// SemVer 2.0.0 grammar (https://semver.org/). Validates the COMPLETE string:
+// major.minor.patch, no leading zeroes, optional dot-separated prerelease and
+// build identifiers of [0-9A-Za-z-]. Anchored so any trailing material fails.
+var SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/
+
+// True only when the WHOLE string is a valid SemVer 2.0.0 version. HTML/XML
+// markup, whitespace, empty or zero-padded identifiers, and any trailing
+// material all fail validation (fail closed).
 function validSemver(raw) {
   var s = String(raw === undefined || raw === null ? "" : raw)
-  var core = s.split("+")[0]
-  var corePre = core.split("-")[0]
-  var parts = corePre.split(".")
-  if (parts.length !== 3) return false
-  for (var i = 0; i < 3; i++) {
-    if (!/^\d+$/.test(parts[i])) return false
-    if (parts[i].length > 1 && parts[i][0] === "0") return false
-  }
-  return true
+  if (s === "") return false
+  if (/\s/.test(s)) return false
+  return SEMVER_RE.test(s)
 }
 
 // -1 if a < b, 0 if equal, 1 if a > b. A pre-release sorts before its release.

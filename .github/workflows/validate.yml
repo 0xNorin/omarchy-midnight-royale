@@ -49,3 +49,13 @@ jobs:
 
       - name: Model.js unit tests
         run: node test/Model.test.js
+
+      - name: Dynamic text sinks are plain-text
+        run: |
+          texts=$(grep -c 'Text {' Panel.qml)
+          plains=$(grep -c 'textFormat: Text.PlainText' Panel.qml)
+          echo "Text elements: $texts, PlainText bindings: $plains"
+          if [ "$texts" -ne "$plains" ]; then
+            echo "every Text element in Panel.qml must set textFormat: Text.PlainText"; exit 1
+          fi
+          [ "$plains" -ge 5 ] || { echo "expected at least 5 plain-text Text elements"; exit 1; }

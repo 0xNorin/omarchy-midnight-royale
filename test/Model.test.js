@@ -216,4 +216,75 @@ test("explicit manual refresh bypasses throttle", () => {
   assert.strictEqual(M.isUpdateCheckDue(true, 0, now), true);
 });
 
+// ---- Full SemVer 2.0.0 validation (finding: markup-like version suffixes) ----
+
+test("valid full SemVer: normal releases", () => {
+  for (const v of ["1.0.9", "1.0.10", "0.0.0", "10.20.30"]) {
+    assert.strictEqual(M.validSemver(v), true, v);
+  }
+});
+
+test("valid full SemVer: prerelease", () => {
+  for (const v of ["2.1.0-rc.1", "2.1.0-alpha", "2.1.0-alpha.1", "1.0.0-x.7.z.92", "1.0.0-0.3.7"]) {
+    assert.strictEqual(M.validSemver(v), true, v);
+  }
+});
+
+test("valid full SemVer: build metadata", () => {
+  for (const v of ["2.1.0+build.42", "1.0.0+20130313144700", "1.0.0+exp.sha.5114f85"]) {
+    assert.strictEqual(M.validSemver(v), true, v);
+  }
+});
+
+test("valid full SemVer: prerelease + build metadata", () => {
+  assert.strictEqual(M.validSemver("2.1.0-rc.1+build.42"), true);
+  assert.strictEqual(M.validSemver("1.0.0-alpha+001"), true);
+});
+
+test("invalid full SemVer: malformed numeric core", () => {
+  for (const v of ["1.0", "1", "1.0.0.1", "1..0", ".1.0", "1.0."]) {
+    assert.strictEqual(M.validSemver(v), false, JSON.stringify(v));
+  }
+});
+
+test("invalid full SemVer: leading zeroes", () => {
+  for (const v of ["01.0.0", "1.01.0", "1.0.01", "1.0.0-01"]) {
+    assert.strictEqual(M.validSemver(v), false, JSON.stringify(v));
+  }
+});
+
+test("invalid full SemVer: empty prerelease/build identifiers", () => {
+  for (const v of ["1.0.0-", "1.0.0+", "1.0.0-rc..1", "1.0.0+build..1"]) {
+    assert.strictEqual(M.validSemver(v), false, JSON.stringify(v));
+  }
+});
+
+test("invalid full SemVer: whitespace / newlines", () => {
+  for (const v of ["1.0.9 ", " 1.0.9", "1.0.9\n", "1.0.9\r\n", "1.0.9\t", "1.0.9 extra"]) {
+    assert.strictEqual(M.validSemver(v), false, JSON.stringify(v));
+  }
+});
+
+test("invalid full SemVer: HTML/XML/markup and quotes", () => {
+  for (const v of ["1.0.0<script>", "1.0.0-<b>x</b>", "1.0.0+<img>", '1.0.0"><b>x</b>', "1.0.10-<b>owned</b>", "1.0.0-rc.1+<img src=x>"]) {
+    assert.strictEqual(M.validSemver(v), false, JSON.stringify(v));
+  }
+});
+
+test("parseStableJson rejects markup-like version payloads", () => {
+  const a = JSON.stringify({ app_id: "midnight-royale", channel: "stable", status: "published", version: "1.0.10-<b>owned</b>" });
+  assert.strictEqual(M.parseStableJson(a), null);
+  const b = JSON.stringify({ app_id: "midnight-royale", channel: "stable", status: "published", version: "1.0.10+<img>" });
+  assert.strictEqual(M.parseStableJson(b), null);
+  const c = JSON.stringify({ app_id: "midnight-royale", channel: "stable", status: "published", version: '1.0.10"><b>x</b>' });
+  assert.strictEqual(M.parseStableJson(c), null);
+});
+
+test("version comparison still works for valid prerelease/build", () => {
+  assert.strictEqual(M.compareVersions("1.0.9", "1.0.10"), -1);
+  assert.strictEqual(M.compareVersions("1.0.0-rc.1", "1.0.0"), -1);
+  assert.strictEqual(M.compareVersions("1.0.0+build", "1.0.0"), 0);
+  assert.strictEqual(M.compareVersions("2.1.0-rc.1+build.42", "2.1.0"), -1);
+});
+
 console.log("\nAll " + passed + " Model.js tests passed.");
