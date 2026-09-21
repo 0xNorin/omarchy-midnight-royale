@@ -7,9 +7,11 @@ import "Model.js" as Model
 
 // Details panel for the Midnight Royale bar widget. Detects the installed
 // game, reads its version, checks the public release record for a newer
-// version, and — when the game is missing — installs the official Linux
-// release into the user's ~/.local/bin (no sudo). Updates are still delegated
-// to the game's own signed updater, which this plugin does not reimplement.
+// version (display-only), and — when the game is missing — installs the
+// pinned, reviewed Linux release into the user's ~/.local/bin. Installation
+// requires no elevated privileges and never touches system directories.
+// Future application updates are delegated to the game's own signed updater,
+// which this plugin does not reimplement.
 Panel {
   id: root
   moduleName: "app.0xnorin.midnight-royale"
@@ -27,6 +29,14 @@ Panel {
   property string latestVersion: ""
   property string installError: ""
 
+  // ---- Update-check throttle (per shell session, in-memory) ----
+  property real _lastUpdateCheckEpochMs: 0
+  property bool _pendingForceUpdate: false
+
+  // ---- Install pipeline state ----
+  property string _homeDir: ""
+  property string _installTmpdir: ""
+
   readonly property color contentForeground: bar ? bar.foreground : Color.foreground
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -40,7 +50,7 @@ Panel {
   readonly property bool showRetry: statusKey === Model.STATUS_INSTALLED && updateState === Model.UPDATE_UNAVAILABLE
 
   function open() {
-    refresh()
+    refresh(false)
     root.controller.show()
   }
 
@@ -54,15 +64,16 @@ Panel {
     return false
   }
 
-  // Re-run detection and the update check. Called on open, Retry, and after a
-  // successful install. Detection first asks `which` — unlike running the game
-  // binary directly, `which` always exists, so its exit code reliably tells us
-  // whether the game is installed even when the binary is absent.
-  function refresh() {
+  // Re-run local detection, then (unless fresh) the display-only update check.
+  // Called on open (force=false), Retry (force=true) and after a successful
+  // install. Detection first asks `which` — unlike running the game binary
+  // directly, `which` always exists, so its exit code reliably tells us whether
+  // the game is installed even when the binary is absent. The previous update
+  // state is kept so a throttled (skipped) network check doesn't clear it.
+  function refresh(force) {
     statusKey = Model.STATUS_CHECKING
     installedVersion = ""
-    latestVersion = ""
-    updateState = Model.UPDATE_UNAVAILABLE
+    _pendingForceUpdate = !!force
     whichProcess.command = ["which", "midnight-royale"]
     whichProcess.running = true
   }
@@ -78,15 +89,54 @@ Panel {
 
   function openWebsite() { Qt.openUrlExternally(Model.WEBSITE_URL) }
 
-  // Download and install the official Linux release into ~/.local/bin. No
-  // sudo, no shell piping of downloaded content: the tarball is fetched with
-  // curl, its SHA-256 is checked against the release record, and the binary is
-  // extracted and installed with tar/install.
+  // Install the pinned, reviewed Linux release into ~/.local/bin. The artifact
+  // URL and SHA-256 come from Model.js constants, never from remote metadata.
+  // Every step runs as a fixed argv Process — no shell, no interpolation of
+  // remote or user-controlled values. The archive is downloaded into a unique
+  // private temporary directory, checksum-verified against the pinned digest,
+  // validated entry-by-entry, and only the expected regular executable is
+  // installed.
   function install() {
     installError = ""
     statusKey = Model.STATUS_INSTALLING
-    installMetaProcess.command = ["curl", "-fsS", "--max-time", "10", Model.UPDATE_METADATA_URL]
-    installMetaProcess.running = true
+    // Defense-in-depth: the pinned URL must be HTTPS on the allowlisted host.
+    if (!Model.isAllowedHost(Model.BOOTSTRAP_URL)) {
+      _installFail("Bootstrap URL is not on an allowed host.")
+      return
+    }
+    if (_homeDir === "") {
+      _installFail("Could not determine the home directory.")
+      return
+    }
+    _installTmpdir = ""
+    installMktempProcess.command = ["mktemp", "-d"]
+    installMktempProcess.running = true
+  }
+
+  function _installFail(message) {
+    installError = message
+    statusKey = Model.STATUS_NOT_INSTALLED
+    _cleanupInstallTmp()
+  }
+
+  function _cleanupInstallTmp() {
+    if (_installTmpdir !== "") {
+      installCleanupProcess.command = ["rm", "-rf", _installTmpdir]
+      installCleanupProcess.running = true
+      _installTmpdir = ""
+    }
+  }
+
+  // Capture $HOME once for the session so the install destination can be built
+  // without shell expansion.
+  Component.onCompleted: homeProcess.running = true
+
+  Process {
+    id: homeProcess
+    command: ["printenv", "HOME"]
+    running: false
+    stdout: StdioCollector { id: homeStdout; waitForEnd: true; onStreamFinished: root._homeDir = String(text || "").trim() }
+    stderr: StdioCollector { id: homeStderr; waitForEnd: true }
   }
 
   // ---- Detection step 1: which midnight-royale ----
@@ -128,7 +178,12 @@ Panel {
       }
       installedVersion = parsed
       statusKey = Model.STATUS_INSTALLED
-      root.checkUpdates()
+      var forced = _pendingForceUpdate
+      _pendingForceUpdate = false
+      if (Model.isUpdateCheckDue(forced, _lastUpdateCheckEpochMs, Date.now())) {
+        _lastUpdateCheckEpochMs = Date.now()
+        checkUpdates()
+      }
     }
   }
 
@@ -137,7 +192,7 @@ Panel {
 
   function checkUpdates() {
     updateState = Model.UPDATE_UNAVAILABLE
-    updateProcess.command = ["curl", "-fsS", "--max-time", "5", Model.UPDATE_METADATA_URL]
+    updateProcess.command = ["curl", "-fsS", "--proto", "=https", "--max-time", "5", "--max-filesize", String(Model.METADATA_MAX_BYTES), Model.UPDATE_METADATA_URL]
     updateProcess.running = true
   }
 
@@ -166,33 +221,32 @@ Panel {
     }
   }
 
-  // ---- Install pipeline: metadata -> download -> verify -> extract/install ----
-  property string _installMetaOutput: ""
-  property string _installUrl: ""
-  property string _installSha256: ""
-  property string _installVerifyOutput: ""
+  // ---- Install pipeline ----
+  // mktemp -> download -> sha256sum -> tar -tvf -> tar extract -> find check
+  // -> install. Each decision delegates to a pure Model.js function; each step
+  // is a fixed argv Process. No remote or user-controlled value is ever
+  // interpolated into a shell command, and the temporary directory is a unique
+  // mode-0700 directory created with mktemp.
 
   Process {
-    id: installMetaProcess
+    id: installMktempProcess
     command: []
     running: false
-    stdout: StdioCollector { id: installMetaStdout; waitForEnd: true; onStreamFinished: root._installMetaOutput = text }
-    stderr: StdioCollector { id: installMetaStderr; waitForEnd: true }
+    stdout: StdioCollector { id: installMktempStdout; waitForEnd: true }
+    stderr: StdioCollector { id: installMktempStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        root.installError = "Could not reach the release server."
-        statusKey = Model.STATUS_NOT_INSTALLED
+        root._installFail("Could not create a temporary directory.")
         return
       }
-      var meta = Model.parseStableJson(String(root._installMetaOutput || installMetaStdout.text || ""))
-      if (meta === null || meta.linuxAmd64 === null) {
-        root.installError = "No Linux release is available."
-        statusKey = Model.STATUS_NOT_INSTALLED
+      var dir = String(installMktempStdout.text || "").trim()
+      // mktemp -d returns an absolute, unique path; require it before use.
+      if (dir === "" || dir[0] !== "/") {
+        root._installFail("Invalid temporary directory.")
         return
       }
-      root._installUrl = meta.linuxAmd64.url
-      root._installSha256 = meta.linuxAmd64.sha256
-      installDownloadProcess.command = ["curl", "-fSs", "--max-time", "180", "-o", "/tmp/mr-download.tar.gz", root._installUrl]
+      root._installTmpdir = dir
+      installDownloadProcess.command = ["curl", "-fS", "--proto", "=https", "--max-time", "180", "--max-filesize", "20000000", "-o", dir + "/archive", Model.BOOTSTRAP_URL]
       installDownloadProcess.running = true
     }
   }
@@ -205,11 +259,10 @@ Panel {
     stderr: StdioCollector { id: installDownloadStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        root.installError = "Download failed."
-        statusKey = Model.STATUS_NOT_INSTALLED
+        root._installFail("Download failed.")
         return
       }
-      installVerifyProcess.command = ["sha256sum", "/tmp/mr-download.tar.gz"]
+      installVerifyProcess.command = ["sha256sum", root._installTmpdir + "/archive"]
       installVerifyProcess.running = true
     }
   }
@@ -218,40 +271,107 @@ Panel {
     id: installVerifyProcess
     command: []
     running: false
-    stdout: StdioCollector { id: installVerifyStdout; waitForEnd: true; onStreamFinished: root._installVerifyOutput = text }
+    stdout: StdioCollector { id: installVerifyStdout; waitForEnd: true }
     stderr: StdioCollector { id: installVerifyStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        root.installError = "Could not verify the download."
-        statusKey = Model.STATUS_NOT_INSTALLED
+        root._installFail("Could not verify the download.")
         return
       }
-      var hash = Model.parseSha256Sum(String(root._installVerifyOutput || installVerifyStdout.text || ""))
-      if (hash === null || hash !== root._installSha256) {
-        root.installError = "Checksum mismatch; install aborted."
-        statusKey = Model.STATUS_NOT_INSTALLED
+      if (!Model.verifyChecksum(String(installVerifyStdout.text || ""), Model.BOOTSTRAP_SHA256)) {
+        root._installFail("Checksum mismatch; install aborted.")
         return
       }
-      installFinishProcess.command = ["bash", "-lc", "set -e; mkdir -p ~/.local/bin; rm -rf /tmp/mr-install; mkdir -p /tmp/mr-install; tar -xzf /tmp/mr-download.tar.gz -C /tmp/mr-install; install -m 755 /tmp/mr-install/midnight-royale ~/.local/bin/midnight-royale; rm -rf /tmp/mr-install /tmp/mr-download.tar.gz"]
-      installFinishProcess.running = true
+      installListProcess.command = ["tar", "-tvf", root._installTmpdir + "/archive"]
+      installListProcess.running = true
     }
   }
 
   Process {
-    id: installFinishProcess
+    id: installListProcess
     command: []
     running: false
-    stdout: StdioCollector { id: installFinishStdout; waitForEnd: true }
-    stderr: StdioCollector { id: installFinishStderr; waitForEnd: true }
+    stdout: StdioCollector { id: installListStdout; waitForEnd: true }
+    stderr: StdioCollector { id: installListStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        root.installError = "Install failed."
-        statusKey = Model.STATUS_NOT_INSTALLED
+        root._installFail("Could not inspect the archive.")
         return
       }
-      // Installed — re-detect so the panel flips to the installed state.
-      root.refresh()
+      var verdict = Model.validateTarList(String(installListStdout.text || ""))
+      if (!verdict.ok) {
+        root._installFail("Unsafe archive: " + verdict.reason)
+        return
+      }
+      installExtractProcess.command = ["tar", "--no-same-owner", "--no-same-permissions", "-xzf", root._installTmpdir + "/archive", "-C", root._installTmpdir, Model.BOOTSTRAP_EXECUTABLE]
+      installExtractProcess.running = true
     }
+  }
+
+  Process {
+    id: installExtractProcess
+    command: []
+    running: false
+    stdout: StdioCollector { id: installExtractStdout; waitForEnd: true }
+    stderr: StdioCollector { id: installExtractStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root._installFail("Extraction failed.")
+        return
+      }
+      installCheckProcess.command = ["find", root._installTmpdir, "-maxdepth", "1", "-type", "f", "-name", Model.BOOTSTRAP_EXECUTABLE, "-print"]
+      installCheckProcess.running = true
+    }
+  }
+
+  Process {
+    id: installCheckProcess
+    command: []
+    running: false
+    stdout: StdioCollector { id: installCheckStdout; waitForEnd: true }
+    stderr: StdioCollector { id: installCheckStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var expected = root._installTmpdir + "/" + Model.BOOTSTRAP_EXECUTABLE
+      var found = String(installCheckStdout.text || "").trim()
+      // `find -type f` matches only a regular file (never a symlink), so this
+      // independently confirms the extracted source exists and is a plain file.
+      if (exitCode !== 0 || found !== expected) {
+        root._installFail("Extracted executable is not the expected regular file.")
+        return
+      }
+      installInstallProcess.command = ["install", "-D", "-m", "755", expected, root._homeDir + "/.local/bin/" + Model.BOOTSTRAP_EXECUTABLE]
+      installInstallProcess.running = true
+    }
+  }
+
+  Process {
+    id: installInstallProcess
+    command: []
+    running: false
+    stdout: StdioCollector { id: installInstallStdout; waitForEnd: true }
+    stderr: StdioCollector { id: installInstallStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root._installFail("Install failed.")
+        return
+      }
+      // The pinned bootstrap release was just installed; it is, by definition,
+      // the current stable version.
+      updateState = Model.UPDATE_CURRENT
+      latestVersion = Model.BOOTSTRAP_VERSION
+      _cleanupInstallTmp()
+      // Re-detect so the panel flips to the installed state.
+      root.refresh(false)
+    }
+  }
+
+  Process {
+    id: installCleanupProcess
+    command: []
+    running: false
+    // No collectors: `rm -rf` produces no output. The path being removed is
+    // always a unique directory created by `mktemp -d` earlier in this
+    // pipeline, never a predictable shared path.
   }
 
   // ---- Rendering ----
@@ -355,7 +475,7 @@ Panel {
           visible: root.showRetry
           text: "RETRY"
           tooltipText: "Check for updates again"
-          onClicked: root.refresh()
+          onClicked: root.refresh(true)
         }
 
         ActionButton {

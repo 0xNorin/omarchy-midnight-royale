@@ -1,0 +1,10 @@
+{
+  "name": "omarchy-midnight-royale",
+  "version": "0.1.1",
+  "private": true,
+  "description": "An Omarchy bar applet for installing, launching and updating Midnight Royale.",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node test/Model.test.js"
+  }
+}
